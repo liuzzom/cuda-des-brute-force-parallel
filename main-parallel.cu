@@ -65,25 +65,82 @@ __device__ __host__ uint64_t strtouint64(char *string){
 	return uword;
 }
 
+__constant__ uint64_t c_target; // constant memory copy of target
+__constant__ char c_charset[CN]; // constant memory copy of charset
+
 // dictionary kernel
-__global__ void dict_kernel(uint64_t *dictionary, uint64_t *target, uint64_t *result){
+__global__ void dict_kernel(uint64_t *dictionary, uint64_t *result){
 	int index = blockIdx.x * blockDim.x + threadIdx.x;
 
 	// check if the thread has some work to do
 	if(index < DICT_SIZE){
 		uint64_t word = dictionary[index];
 		uint64_t hash_word = full_des_encode_block(word, word);
-		if(hash_word == *target){ // the thread found the solution
+		if(hash_word == c_target){ // the thread found the solution
 			*result = word;
+			return;
 		}
 	}
+}
+
+__global__ void matrix_kernel(uint64_t *result, int offset){
+	// thread coordinates
+	int ix = blockIdx.x * blockDim.x + threadIdx.x; // blockIdx.x = 0 ix defines the column in the matrix
+	int iy = (blockIdx.y * blockDim.y + threadIdx.y) + (offset * 16); // blockIdx.y = 0 iy defines the row in the matrix
+
+	// shared control flag
+	__shared__ int found;
+	found = 0;
+
+	__syncthreads();
+
+	// check if the thread has some work to do
+	if(ix < CN && iy < CN){
+		// generated word
+		char word[WS];
+		word[0] = c_charset[iy]; // stays in registers
+		word[1] = c_charset[ix]; // stays in registers
+
+		for(int a = 0; a < CN; a++){
+			for(int b = 0; b < CN; b++){
+				for(int c = 0; c < CN; c++){
+					for(int d = 0; d < CN; d++){
+						for(int e = 0; e < CN; e++){
+							for(int f = 0; f < CN; f++){
+								if(found == 1){
+									return;
+								}
+
+								word[2] = c_charset[a];
+								word[3] = c_charset[b];
+								word[4] = c_charset[c];
+								word[5] = c_charset[d];
+								word[6] = c_charset[e];
+								word[7] = c_charset[f];
+
+								// conversion and encryption
+								uint64_t uword = strtouint64(word);
+								uint64_t hash_word = full_des_encode_block(uword, uword);
+
+								if(hash_word == c_target){
+									*result = uword;
+									found = 1;
+									return;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return;
 }
 
 int main(int argc, char **argv) {
 	char *password = (char*)malloc(WS * sizeof(char)); // contains the target
 	uint64_t upassword; // uint64_t version of the target
 	uint64_t crypted_target; // uint64_t version of the crypted target
-	uint64_t *d_target;
 
 	char *curr_word = (char*)malloc(WS * sizeof(char)); // readed from dictionary or generated
 	uint64_t uint_curr_word; // uint64_t version of curr_word
@@ -92,13 +149,18 @@ int main(int argc, char **argv) {
 	uint64_t *h_dictionary = (uint64_t *) malloc(DICT_SIZE * sizeof(uint64_t)); // host copy of dictionary
 	uint64_t *d_dictionary; // device copy of dictionary
 
+	// charset
+	char characters[CN] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+						   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+						   '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+
+	// decryption result
 	uint64_t *result = (uint64_t *)malloc(sizeof(uint64_t));
-	// *result = 0x0000000000000000;
-	*result = NULL;
+	memset(result, 0, sizeof(uint64_t));
 	uint64_t *d_result;
 
-	password = "password";
-
+	// password to find
+	password = "aaaaaazb";
 	// verify if the user inserted eight characters password
 	if((int)strlen(password) != 8){
 		error("error: insert an eight characters password");
@@ -110,6 +172,9 @@ int main(int argc, char **argv) {
 	crypted_target = full_des_encode_block(upassword, upassword);
 	printf("crypted target:");
 	bits_print_grouped(crypted_target, 8, 64);
+
+	// start counting clock cycles
+	clock_t start_t = clock();
 
 	puts("\nPhase 1: Try with dictionary");
 	// open dictionary file
@@ -137,33 +202,44 @@ int main(int argc, char **argv) {
 	puts("import/conversion done...");
 	puts("");
 
-	// gpu malloc
-	puts("gpu malloc...");
+	// gpu malloc and memset
+	puts("gpu malloc and memset...");
 	CUDA_CHECK_RETURN(cudaMalloc((void**) &d_dictionary, DICT_SIZE * sizeof(uint64_t)));
 	CUDA_CHECK_RETURN(cudaMalloc((void**) &d_result, sizeof(uint64_t)));
-	CUDA_CHECK_RETURN(cudaMalloc((void**) &d_target, sizeof(uint64_t)));
-	puts("malloc done...");
+	CUDA_CHECK_RETURN(cudaMemset(d_result, 0, sizeof(uint64_t)));
+	puts("malloc and memset done...");
 	puts("");
 
 	//gpu memcpy
 	puts("gpu memcpy...");
 	CUDA_CHECK_RETURN(cudaMemcpy(d_dictionary, h_dictionary, DICT_SIZE * sizeof(uint64_t), cudaMemcpyHostToDevice));
-	CUDA_CHECK_RETURN(cudaMemcpy(d_target, &crypted_target, sizeof(uint64_t), cudaMemcpyHostToDevice));
+	CUDA_CHECK_RETURN(cudaMemcpyToSymbol(c_target, &crypted_target, sizeof(uint64_t)));
 	puts("gpu memcpy done...");
 	puts("");
 
-	//kernel launch
+	// dictionary kernel launch
 	puts("dictionary kernel launch...");
 	int block_size = DICT_SIZE/THREADS_NUM + 1;
-	dict_kernel<<<block_size, THREADS_NUM>>>(d_dictionary, d_target, d_result);
+	dict_kernel<<<block_size, THREADS_NUM>>>(d_dictionary, d_result);
 
 	// copying result
 	CUDA_CHECK_RETURN(cudaMemcpy(result, d_result, sizeof(uint64_t), cudaMemcpyDeviceToHost));
 
 	// check the result
-	if(*result != NULL){
+	if(*result != 0x0000000000000000){
 		printf("password found:");
 		bits_print_grouped(*result, 8, 64);
+
+		// gpu memory deallocation
+		CUDA_CHECK_RETURN(cudaFree(d_dictionary));
+		CUDA_CHECK_RETURN(cudaFree(d_result));
+
+		// stop counting clock cycles and calculate elapsed time
+		clock_t end_t = clock();
+		clock_t total_t = (end_t - start_t);
+		printf("Elapsed Time:%.3f seconds\n", (double)total_t/((double)CLOCKS_PER_SEC));
+
+		return 0;
 	}else{
 		puts("password not in dictionary...");
 	}
@@ -171,5 +247,41 @@ int main(int argc, char **argv) {
 	// gpu memory deallocation
 	CUDA_CHECK_RETURN(cudaFree(d_dictionary));
 
+	// Phase 2
+	puts("\nPhase2: password generation");
+
+	// copy the charset on device constant memory
+	CUDA_CHECK_RETURN(cudaMemcpyToSymbol(c_charset, characters, CN*sizeof(char)));
+
+	// organizing threads
+	dim3 block(64, 16);
+
+	// matrix kernel launches
+	for(int offset = 0; offset < 4; offset++){
+		printf("%d° matrix kernel launch...\n", offset + 1);
+		matrix_kernel<<<1, block>>>(d_result, offset);
+
+		// copying result
+		CUDA_CHECK_RETURN(cudaMemcpy(result, d_result, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+
+		// check the result
+		if(*result != 0x0000000000000000){
+			printf("password found:");
+			bits_print_grouped(*result, 8, 64);
+
+			// gpu memory deallocation
+			CUDA_CHECK_RETURN(cudaFree(d_result));
+
+			// stop counting clock cycles and calculate elapsed time
+			clock_t end_t = clock();
+			clock_t total_t = (end_t - start_t);
+			printf("Elapsed Time:%.3f seconds\n", (double)total_t/((double)CLOCKS_PER_SEC));
+
+			return 0;
+		}else{
+			printf("password not found in %d matrix kernel...\n", offset + 1);
+		}
+
+	}
 	return 0;
 }
