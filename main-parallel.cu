@@ -70,12 +70,18 @@ __constant__ uint64_t c_target; // constant memory copy of target
 // dictionary kernel
 __global__ void dict_kernel(uint64_t *dictionary, uint64_t *result){
 	int index = blockIdx.x * blockDim.x + threadIdx.x;
+	__shared__ uint64_t sh_target;
+
+	if(threadIdx.x == 0){
+		sh_target = c_target;
+	}
+	__syncthreads();
 
 	// check if the thread has some work to do
 	if(index < DICT_SIZE){
 		uint64_t word = dictionary[index];
 		uint64_t hash_word = full_des_encode_block(word, word);
-		if(hash_word == c_target){ // the thread found the solution
+		if(hash_word == sh_target){ // the thread found the solution
 			*result = word;
 			return;
 		}
@@ -84,12 +90,18 @@ __global__ void dict_kernel(uint64_t *dictionary, uint64_t *result){
 
 __global__ void brute_kernel(uint64_t *result, int offset){
 	unsigned long long index = blockIdx.x * blockDim.x + threadIdx.x + offset;
+	__shared__ uint64_t sh_target;
+
+	if(threadIdx.x == 0){
+		sh_target = c_target;
+	}
+	__syncthreads();
 
 	// check if the thread has some work to do
 	if(index < 0xFFFFFFFFFFFFFFFF){
 		uint64_t word = index + 3472328296227680304;
 		uint64_t hash_word = full_des_encode_block(word, word);
-		if(hash_word == c_target){ // the thread found the solution
+		if(hash_word == sh_target){ // the thread found the solution
 			*result = word;
 			return;
 		}
@@ -120,7 +132,7 @@ int main(int argc, char **argv) {
 	uint64_t *d_result;
 
 	// password to find
-	password = "00000z00";
+	password = "password";
 	// verify if the user inserted eight characters password
 	if((int)strlen(password) != 8){
 		printf("%d\n", (int)strlen(password));
@@ -209,9 +221,9 @@ int main(int argc, char **argv) {
 	CUDA_CHECK_RETURN(cudaFree(d_dictionary));
 
 	// Phase 2
-	puts("\nPhase2: password generation");
+	puts("\nPhase2: brute force. This may take a long time...");
 	unsigned long long brute_size = 0xFFFFFFFFFFFFFFFF;
-	unsigned int brute_blocks = 1024, brute_threads = 1024;
+	unsigned int brute_blocks = 512, brute_threads = 512;
 
 	for(int i = 0; i < (brute_size/brute_blocks)+1; i++){
 		brute_kernel<<<brute_blocks,brute_threads>>>(d_result, i *(brute_blocks*brute_threads));
