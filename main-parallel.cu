@@ -89,7 +89,7 @@ __global__ void dict_kernel(uint64_t *dictionary, uint64_t *result){
 }
 
 __global__ void brute_kernel(uint64_t *result, int offset){
-	unsigned long long index = blockIdx.x * blockDim.x + threadIdx.x + offset;
+	uint64_t word = blockIdx.x * blockDim.x + threadIdx.x + offset;
 	__shared__ uint64_t sh_target;
 
 	if(threadIdx.x == 0){
@@ -98,8 +98,8 @@ __global__ void brute_kernel(uint64_t *result, int offset){
 	__syncthreads();
 
 	// check if the thread has some work to do
-	if(index < 0xFFFFFFFFFFFFFFFF){
-		uint64_t word = index + 3472328296227680304;
+	if(word < 0xFFFFFFFFFFFFFFFF){
+		word += 3472328296227680304;
 		uint64_t hash_word = full_des_encode_block(word, word);
 		if(hash_word == sh_target){ // the thread found the solution
 			*result = word;
