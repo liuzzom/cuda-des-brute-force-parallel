@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
 	uint64_t *d_result;
 
 	// password to find
-	password = "password";
+	password = "00000z00";
 	// verify if the user inserted eight characters password
 	if((int)strlen(password) != 8){
 		printf("%d\n", (int)strlen(password));
@@ -224,8 +224,9 @@ int main(int argc, char **argv) {
 	puts("\nPhase2: brute force. This may take a long time...");
 	unsigned long long brute_size = 0xFFFFFFFFFFFFFFFF;
 	unsigned int brute_blocks = 512, brute_threads = 512;
+	// a kernel launch processes (brute_blocks * brute_threads) elements
 
-	for(int i = 0; i < (brute_size/brute_blocks)+1; i++){
+	for(int i = 0; i < (brute_size/(brute_blocks*brute_threads))+1; i++){
 		brute_kernel<<<brute_blocks,brute_threads>>>(d_result, i *(brute_blocks*brute_threads));
 		// copying result
 		CUDA_CHECK_RETURN(cudaMemcpy(result, d_result, sizeof(uint64_t), cudaMemcpyDeviceToHost));
