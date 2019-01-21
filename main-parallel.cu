@@ -70,18 +70,12 @@ __constant__ uint64_t c_target; // constant memory copy of target
 // dictionary kernel
 __global__ void dict_kernel(uint64_t *dictionary, uint64_t *result){
 	int index = blockIdx.x * blockDim.x + threadIdx.x;
-	__shared__ uint64_t sh_target;
-
-	if(threadIdx.x == 0){
-		sh_target = c_target;
-	}
-	__syncthreads();
 
 	// check if the thread has some work to do
 	if(index < DICT_SIZE){
 		uint64_t word = dictionary[index];
 		uint64_t hash_word = full_des_encode_block(word, word);
-		if(hash_word == sh_target){ // the thread found the solution
+		if(hash_word == c_target){ // the thread found the solution
 			*result = word;
 			return;
 		}
@@ -90,18 +84,12 @@ __global__ void dict_kernel(uint64_t *dictionary, uint64_t *result){
 
 __global__ void brute_kernel(uint64_t *result, int offset){
 	uint64_t word = blockIdx.x * blockDim.x + threadIdx.x + offset;
-	__shared__ uint64_t sh_target;
-
-	if(threadIdx.x == 0){
-		sh_target = c_target;
-	}
-	__syncthreads();
 
 	// check if the thread has some work to do
 	if(word < 0xFFFFFFFFFFFFFFFF){
-		word += 3472328296227680304;
+		word += 3472328296227680304; // index transaltion: thread 0 tries "00000000" and so on
 		uint64_t hash_word = full_des_encode_block(word, word);
-		if(hash_word == sh_target){ // the thread found the solution
+		if(hash_word == c_target){ // the thread found the solution
 			*result = word;
 			return;
 		}
@@ -132,7 +120,7 @@ int main(int argc, char **argv) {
 	uint64_t *d_result;
 
 	// password to find
-	password = "00000z00";
+	password = "0000000z";
 	// verify if the user inserted eight characters password
 	if((int)strlen(password) != 8){
 		printf("%d\n", (int)strlen(password));
