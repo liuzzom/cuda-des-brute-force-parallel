@@ -87,7 +87,7 @@ __global__ void brute_kernel(uint64_t *result, int offset){
 
 	// check if the thread has some work to do
 	if(word < 0xFFFFFFFFFFFFFFFF){
-		word += 3472328296227680304; // index transaltion: thread 0 tries "00000000" and so on
+		word += 3472328296227680304; // index translation: thread 0 tries "00000000" and so on
 		uint64_t hash_word = full_des_encode_block(word, word);
 		if(hash_word == c_target){ // the thread found the solution
 			*result = word;
